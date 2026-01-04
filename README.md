@@ -31,7 +31,7 @@ Buy One Block introduces a multi-layered utility system including:
 - **Name:** Buy One Block  
 - **Symbol:** 1BONEBU  
 - **Network:** Binance Smart Chain (BEP-20)  
-- **Total Supply:** 1,000,000,000  
+- **Total Supply:** 320,000,000  
 - **Contract Address:** _To be added after deployment_  
 
 ---
