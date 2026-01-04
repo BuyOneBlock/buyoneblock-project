@@ -74,6 +74,6 @@ Use a clear and descriptive name:
 
 
 For questions related to contributions:
-**contact@buyoneblock.com** *(à adapter si nécessaire)*
+**buyoneblock@buy_one_block.com** *(à adapter si nécessaire)*
 
 Thank you for helping strengthen the Buy One Block ecosystem.
