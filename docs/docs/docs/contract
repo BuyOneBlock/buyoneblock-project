@@ -1,1 +1,357 @@
+ *Submitted for verification at BscScan.com on 2025-12-23
+*/
 
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+/**
+ * @title 1BONEBU Token with USDT BEP-20 phased sale
+ *
+ * Total supply: 320,000,000 1BONEBU (18 decimals)
+ *
+ * Distribution at deployment:
+ *  - 40,000,000 to creator (ADMIN)
+ *  - 10,000,000 to airdrop wallet
+ *  - 270,000,000 kept in this contract for sale phases
+ *
+ * Sale phases (token amounts + price per token in USDT):
+ *  Phase 1: 20,000,000 tokens @ 10   USDT
+ *  Phase 2: 50,000,000 tokens @ 20   USDT
+ *  Phase 3: 50,000,000 tokens @ 40   USDT
+ *  Phase 4: 50,000,000 tokens @ 80   USDT
+ *  Phase 5: 50,000,000 tokens @ 160  USDT
+ *  Phase 6: 20,000,000 tokens @ 320  USDT
+ *  Phase 7: 20,000,000 tokens @ 640  USDT
+ *  Phase 8: 10,000,000 tokens @ 1280 USDT
+ *
+ * Admin / owner:          0xa83fc49951e479d0713B7feaAFD166F54282f587
+ * Funds recipient wallet: 0x9A801f0f9a8717957F46b1D25eD8d5237AfC9a88
+ * USDT (BEP-20 BNB):      0x55d398326f99059fF775485246999027B3197955
+ */
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract OneBonebuToken {
+    string public name = "1BONEBU";
+    string public symbol = "1BONEBU";
+    uint8 public decimals = 18;
+    uint256 public totalSupply;
+
+    mapping(address => uint256) internal _balances;
+    mapping(address => mapping(address => uint256)) internal _allowances;
+
+    address public owner;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    constructor(uint256 _initialSupply, address _owner) {
+        require(_owner != address(0), "Owner zero");
+        owner = _owner;
+        totalSupply = _initialSupply;
+        _balances[address(this)] = _initialSupply;
+        emit Transfer(address(0), address(this), _initialSupply);
+    }
+
+    function balanceOf(address account) public view returns (uint256) {
+        return _balances[account];
+    }
+
+    function transfer(address to, uint256 amount) public returns (bool) {
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function allowance(address _owner, address spender) public view returns (uint256) {
+        return _allowances[_owner][spender];
+    }
+
+    function approve(address spender, uint256 amount) public returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
+        uint256 currentAllowance = _allowances[from][msg.sender];
+        require(currentAllowance >= amount, "Allowance exceeded");
+        unchecked {
+            _approve(from, msg.sender, currentAllowance - amount);
+        }
+        _transfer(from, to, amount);
+        return true;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+        require(to != address(0), "To zero");
+        uint256 fromBalance = _balances[from];
+        require(fromBalance >= amount, "Balance too low");
+        unchecked {
+            _balances[from] = fromBalance - amount;
+        }
+        _balances[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+
+    function _approve(address _owner, address spender, uint256 amount) internal {
+        require(_owner != address(0) && spender != address(0), "Zero address");
+        _allowances[_owner][spender] = amount;
+        emit Approval(_owner, spender, amount);
+    }
+}
+
+contract OneBonebuSale is OneBonebuToken {
+    // Hardcoded admin (owner) and funds wallet
+    address public constant ADMIN = 0xa83fc49951e479d0713B7feaAFD166F54282f587;
+    address public constant FUNDS_WALLET = 0x9A801f0f9a8717957F46b1D25eD8d5237AfC9a88;
+
+    // USDT BEP-20 contract address (BNB Smart Chain)
+    IERC20 public constant USDT = IERC20(0x55d398326f99059fF775485246999027B3197955);
+
+    // Airdrop wallet (par défaut = ADMIN, modifiable)
+    address public airdropWallet;
+
+    uint8 public constant PHASE_COUNT = 8;
+
+    struct Phase {
+        uint256 tokenAmount;      // total tokens allocated to this phase
+        uint256 tokensSold;       // tokens already sold
+        uint256 priceInUSDT;      // price per token in USDT (18 decimals)
+        bool active;              // whether this phase is active
+    }
+
+    mapping(uint8 => Phase) public phases;
+
+    uint8 public currentPhase;
+
+    bool public salePaused;
+
+    event PhaseConfigured(uint8 indexed phaseId, uint256 tokenAmount, uint256 priceInUSDT, bool active);
+    event PhaseSwitched(uint8 indexed newPhase);
+    event TokensPurchased(
+        address indexed buyer,
+        uint8 indexed phaseId,
+        uint256 tokenAmount,
+        uint256 usdtPaid
+    );
+    event TokensAirdropped(address indexed to, uint256 amount);
+    event SalePaused(bool paused);
+    event AdminTransfer(address indexed to, uint256 amount);
+    event AirdropWalletChanged(address indexed newWallet);
+
+    modifier onlyAdmin() {
+        require(msg.sender == ADMIN, "Not admin");
+        _;
+    }
+
+    constructor()
+        OneBonebuToken(
+            320_000_000 * 10**18, // total supply
+            ADMIN                  // owner
+        )
+    {
+        owner = ADMIN;
+        airdropWallet = ADMIN;
+
+        _initialDistributions();
+        _configurePhases();
+        salePaused = false;
+    }
+
+    function _initialDistributions() internal {
+        uint256 d = 10**18;
+
+        // 40,000,000 to creator (ADMIN)
+        uint256 creatorAmount = 40_000_000 * d;
+
+        // 10,000,000 to airdrop wallet
+        uint256 airdropAmount = 10_000_000 * d;
+
+        // Move from contract (which holds full supply) to airdrop wallet
+        _transfer(address(this), airdropWallet, airdropAmount);
+
+        // Move to creator (ADMIN)
+        _transfer(address(this), ADMIN, creatorAmount);
+
+        // Remainder (270,000,000 * 1e18) stays in this contract for sale phases
+    }
+
+    function _configurePhases() internal {
+        uint256 d = 10**18;
+
+        // Phase 1: 20,000,000 @ 10 USDT
+        phases[1] = Phase({
+            tokenAmount: 20_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 10 * d,
+            active: true
+        });
+
+        // Phase 2: 50,000,000 @ 20 USDT
+        phases[2] = Phase({
+            tokenAmount: 50_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 20 * d,
+            active: false
+        });
+
+        // Phase 3: 50,000,000 @ 40 USDT
+        phases[3] = Phase({
+            tokenAmount: 50_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 40 * d,
+            active: false
+        });
+
+        // Phase 4: 50,000,000 @ 80 USDT
+        phases[4] = Phase({
+            tokenAmount: 50_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 80 * d,
+            active: false
+        });
+
+        // Phase 5: 50,000,000 @ 160 USDT
+        phases[5] = Phase({
+            tokenAmount: 50_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 160 * d,
+            active: false
+        });
+
+        // Phase 6: 20,000,000 @ 320 USDT
+        phases[6] = Phase({
+            tokenAmount: 20_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 320 * d,
+            active: false
+        });
+
+        // Phase 7: 20,000,000 @ 640 USDT
+        phases[7] = Phase({
+            tokenAmount: 20_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 640 * d,
+            active: false
+        });
+
+        // Phase 8: 10,000,000 @ 1280 USDT
+        phases[8] = Phase({
+            tokenAmount: 10_000_000 * d,
+            tokensSold: 0,
+            priceInUSDT: 1280 * d,
+            active: false
+        });
+
+        currentPhase = 1;
+
+        for (uint8 i = 1; i <= PHASE_COUNT; i++) {
+            emit PhaseConfigured(i, phases[i].tokenAmount, phases[i].priceInUSDT, phases[i].active);
+        }
+    }
+
+    // -------- ADMIN CONTROLS --------
+
+    function pauseSale(bool _paused) external onlyAdmin {
+        salePaused = _paused;
+        emit SalePaused(_paused);
+    }
+
+    function activatePhase(uint8 phaseId) external onlyAdmin {
+        require(phaseId >= 1 && phaseId <= PHASE_COUNT, "Invalid phase");
+        for (uint8 i = 1; i <= PHASE_COUNT; i++) {
+            phases[i].active = false;
+        }
+        phases[phaseId].active = true;
+        currentPhase = phaseId;
+        emit PhaseSwitched(phaseId);
+    }
+
+    function setPhasePrice(uint8 phaseId, uint256 newPriceInUSDT) external onlyAdmin {
+        require(phaseId >= 1 && phaseId <= PHASE_COUNT, "Invalid phase");
+        phases[phaseId].priceInUSDT = newPriceInUSDT;
+        emit PhaseConfigured(phaseId, phases[phaseId].tokenAmount, phases[phaseId].priceInUSDT, phases[phaseId].active);
+    }
+
+    function setAirdropWallet(address newAirdropWallet) external onlyAdmin {
+        require(newAirdropWallet != address(0), "Zero airdrop");
+        airdropWallet = newAirdropWallet;
+        emit AirdropWalletChanged(newAirdropWallet);
+    }
+
+    /**
+     * @notice Admin can move tokens from the contract to any address
+     * @dev Useful for manual airdrops, creator extra allocation, partnerships, etc.
+     */
+    function adminTransferTokens(address to, uint256 amount) external onlyAdmin {
+        _transfer(address(this), to, amount);
+        emit AdminTransfer(to, amount);
+    }
+
+    /**
+     * @notice Simple batch airdrop from contract balance
+     */
+    function airdrop(address[] calldata recipients, uint256[] calldata amounts) external onlyAdmin {
+        require(recipients.length == amounts.length, "Len mismatch");
+        for (uint256 i = 0; i < recipients.length; i++) {
+            _transfer(address(this), recipients[i], amounts[i]);
+            emit TokensAirdropped(recipients[i], amounts[i]);
+        }
+    }
+
+    // -------- BUY TOKENS WITH USDT --------
+
+    /**
+     * @notice Buy tokens in a specific phase using USDT
+     * @param phaseId The phase in which to buy
+     * @param tokenAmount Amount of 1BONEBU tokens (18 decimals) to buy
+     *
+     * Front flow:
+     *  1) User calls USDT.approve(thisContract, usdtAmount)
+     *  2) Then calls buyTokens(phaseId, tokenAmount)
+     */
+    function buyTokens(uint8 phaseId, uint256 tokenAmount) external {
+        require(!salePaused, "Sale paused");
+        require(phaseId >= 1 && phaseId <= PHASE_COUNT, "Invalid phase");
+        Phase storage phase = phases[phaseId];
+        require(phase.active, "Phase not active");
+        require(tokenAmount > 0, "Zero amount");
+
+        // Check phase capacity
+        require(phase.tokensSold + tokenAmount <= phase.tokenAmount, "Phase cap exceeded");
+
+        // Calculate required USDT: tokenAmount * price / 1e18
+        uint256 usdtToPay = (tokenAmount * phase.priceInUSDT) / (10**18);
+        require(usdtToPay > 0, "USDT amount zero");
+
+        // Check contract token balance
+        require(balanceOf(address(this)) >= tokenAmount, "Not enough tokens");
+
+        // Transfer USDT from buyer to funds wallet
+        uint256 allowanceUSDT = USDT.allowance(msg.sender, address(this));
+        require(allowanceUSDT >= usdtToPay, "USDT allowance too low");
+
+        bool success = USDT.transferFrom(msg.sender, FUNDS_WALLET, usdtToPay);
+        require(success, "USDT transfer failed");
+
+        // Update phase sold and send tokens
+        phase.tokensSold += tokenAmount;
+        _transfer(address(this), msg.sender, tokenAmount);
+
+        emit TokensPurchased(msg.sender, phaseId, tokenAmount, usdtToPay);
+    }
+}
